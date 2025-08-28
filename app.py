@@ -1,3 +1,12 @@
+
+# streamlit_openai_usage_app.py
+# Streamlit app to analyze OpenAI (ChatGPT/API) usage CSVs by month, model, endpoint, project, and user.
+# Author: ChatGPT
+# How to run:
+#   1) pip install streamlit pandas numpy python-dateutil
+#   2) streamlit run streamlit_openai_usage_app.py
+#
+# Works with OpenAI "Usage" CSV exports. It also tries to infer columns if names differ.
 import io
 import json
 import re
@@ -8,6 +17,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from datetime import datetime
+
+st.set_page_config(page_title="OpenAI Usage Analyzer", page_icon="💸", layout="wide")
 
 st.title("💸 OpenAI Usage Analyzer")
 st.caption("Sube tus CSVs de **Usage** de OpenAI (API/Projects). Obtén costos por mes y en dónde se usaron los tokens.")
@@ -74,41 +85,52 @@ def normalize_columns(df):
     mapping['cost'] = guess_col(cols, ["cost", "usd", "amount_usd", "cost_usd", "price_usd"])
 
     # Build normalized dataframe
-    nd = pd.DataFrame()
+    nd = pd.DataFrame(index=df.index)
+
+    # Date
     if mapping['date'] is not None:
         nd["date"] = pd.to_datetime(df[mapping['date']], errors="coerce")
     else:
         nd["date"] = pd.NaT
-    nd["model"] = df[mapping['model']] if mapping['model'] is not None else None
-    nd["endpoint"] = df[mapping['endpoint']] if mapping['endpoint'] is not None else None
-    nd["project"] = df[mapping['project']] if mapping['project'] is not None else None
-    nd["user"] = df[mapping['user']] if mapping['user'] is not None else None
-    nd["org"] = df[mapping['org']] if mapping['org'] is not None else None
 
+    # Helper to safely fetch text columns
+    def safe_text_col(colname):
+        if mapping[colname] is not None:
+            ser = df[mapping[colname]]
+        else:
+            ser = pd.Series(pd.NA, index=df.index, dtype="string")
+        # Cast to pandas "string" dtype for reliable .str operations
+        ser = ser.astype("string")
+        # Normalize some common placeholder strings to NA, then strip
+        ser = ser.replace({"None": pd.NA, "nan": pd.NA, "NaN": pd.NA})
+        ser = ser.str.strip()
+        return ser
+
+    for c in ["model", "endpoint", "project", "user", "org"]:
+        nd[c] = safe_text_col(c)
+
+    # Numeric tokens
     for k in ["input", "output", "total"]:
         if mapping[k] is not None:
             nd[k] = pd.to_numeric(df[mapping[k]], errors="coerce")
         else:
             nd[k] = np.nan
 
+    # Cost
     if mapping["cost"] is not None:
         nd["cost"] = pd.to_numeric(df[mapping["cost"]], errors="coerce")
     else:
         nd["cost"] = np.nan
 
-    # Derive total if missing
+    # Derive total if missing or entirely NaN
     if nd["total"].isna().all():
         nd["total"] = nd[["input", "output"]].sum(axis=1, skipna=True)
 
     # Derive month
     nd["month"] = nd["date"].dt.to_period("M").astype(str)
 
-    # Clean strings
-    for c in ["model", "endpoint", "project", "user", "org"]:
-        if nd[c].dtype == object:
-            nd[c] = nd[c].astype(str).replace({"None": np.nan, "nan": np.nan}).str.strip()
-
     return nd, mapping
+
 
 def estimate_cost(row, pricing_map):
     if not pd.isna(row.get("cost", np.nan)):
