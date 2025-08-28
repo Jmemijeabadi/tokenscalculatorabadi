@@ -1,4 +1,4 @@
-st.set_page_config(page_title="OpenAI Usage Analyzer", page_icon="💸", layout="wide")
+
 
 st.title("💸 OpenAI Usage Analyzer")
 st.caption("Sube tus CSVs de **Usage** de OpenAI (API/Projects). Obtén costos por mes y en dónde se usaron los tokens.")
