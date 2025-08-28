@@ -166,6 +166,7 @@ def normalize_columns(df):
     mapping['project'] = guess_col(cols, ["project", "project_name", "project id", "project_id"])
     mapping['user'] = guess_col(cols, ["user", "user_email", "email", "actor", "owner"])
     mapping['org'] = guess_col(cols, ["org", "organization", "organization_id", "organization name"])
+    mapping['api_key_id'] = guess_col(cols, [\"api_key_id\", \"api key id\", \"key_id\", \"key id\", \"api_key\", \"api key\"])
     mapping['input'] = guess_col(cols, ["prompt tokens", "input tokens", "input_tokens", "prompt_tokens", "tokens_in"])
     mapping['output'] = guess_col(cols, ["completion tokens", "output tokens", "output_tokens", "tokens_out"])
     mapping['total'] = guess_col(cols, ["total tokens", "total_tokens", "tokens_total"])
@@ -186,7 +187,7 @@ def normalize_columns(df):
         ser = ser.astype("string").replace({"None": pd.NA, "nan": pd.NA, "NaN": pd.NA}).str.strip()
         return ser
 
-    for c in ["model", "endpoint", "project", "user", "org"]:
+    for c in [\"model\", \"endpoint\", \"project\", \"user\", \"org\", \"api_key_id\"]:
         nd[c] = safe_text_col(c)
 
     for k in ["input", "output", "total"]:
@@ -267,7 +268,12 @@ def summarize(df):
         rows=("user", "count"),
     ).reset_index().sort_values("cost", ascending=False)
     daily = df.groupby(df["date"].dt.date)["cost_variable"].sum().reset_index().rename(columns={"date":"day"}).sort_values("day")
-    return monthly, by_model, by_endpoint, by_project, by_user, daily
+        by_key = df.groupby("api_key_id", dropna=False).agg(
+        cost=("cost_variable", "sum"),
+        total_tokens=("total", "sum"),
+        rows=("api_key_id", "count"),
+    ).reset_index().sort_values("cost", ascending=False)
+    return monthly, by_model, by_endpoint, by_project, by_user, by_key, daily
 
 def format_money(x):
     try:
@@ -445,7 +451,7 @@ raw = add_estimated_cost(raw, st.session_state.pricing_dict)
 # -----------------------
 # Summaries & Fixed fees allocation
 # -----------------------
-monthly, by_model, by_endpoint, by_project, by_user, daily = summarize(raw)
+monthly, by_model, by_endpoint, by_project, by_user, by_key, daily = summarize(raw)
 
 # Build list of months present in the filtered data
 months_present = monthly["month"].tolist()
@@ -503,6 +509,10 @@ st.dataframe(by_model.assign(cost=by_model["cost"].map(format_money)), use_conta
 st.markdown("## 🔌 Por endpoint (variable)")
 st.dataframe(by_endpoint.assign(cost=by_endpoint["cost"].map(format_money)), use_container_width=True)
 
+st.markdown("## 🔑 Por API key (variable)")
+st.dataframe(by_key.assign(cost=by_key["cost"].map(format_money)), use_container_width=True)
+
+
 st.markdown("## 📁 Por proyecto (variable)")
 st.dataframe(by_project.assign(cost=by_project["cost"].map(format_money)), use_container_width=True)
 
@@ -518,7 +528,7 @@ st.markdown("## ⬇️ Exportar resúmenes")
 def to_csv_bytes(df):
     return df.to_csv(index=False).encode("utf-8")
 
-colA, colB, colC, colD, colE, colF, colG = st.columns(7)
+colA, colB, colC, colD, colE, colF, colG, colH = st.columns(8)
 with colA:
     st.download_button("Mensual (CSV)", to_csv_bytes(monthly_merged), file_name="summary_monthly_total.csv", mime="text/csv")
 with colB:
@@ -533,6 +543,8 @@ with colF:
     st.download_button("Diario (CSV)", to_csv_bytes(daily), file_name="summary_daily.csv", mime="text/csv")
 with colG:
     st.download_button("Cuotas (CSV)", to_csv_bytes(pd.DataFrame(st.session_state.fixed_fees)), file_name="fixed_fees.csv", mime="text/csv")
+with colH:
+    st.download_button("Por API key (CSV)", to_csv_bytes(by_key), file_name="summary_by_api_key.csv", mime="text/csv")
 
 st.markdown("---")
 st.caption("Define tus **precios por modelo** y **cuotas fijas mensuales**. Se guardan en 'pricing_config.json' y 'fixed_fees.json'.")
