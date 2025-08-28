@@ -1,7 +1,18 @@
 
-# streamlit_openai_usage_app.py (pricing + fixed monthly fees persistence)
-# Run: streamlit run streamlit_openai_usage_app.py
-import io, json, re, sys, time, zipfile
+# app.py - OpenAI Usage Analyzer
+# Features:
+# - Load OpenAI Usage CSVs
+# - Persistent pricing per model (pricing_config.json)
+# - Persistent fixed monthly fees (fixed_fees.json), e.g., ChatGPT Plus
+# - Summaries by month, model, endpoint, project, user, and api_key_id
+# - Exports to CSV
+#
+# Run:
+#   pip install streamlit pandas numpy
+#   streamlit run app.py
+
+import json
+import re
 from pathlib import Path
 from datetime import datetime
 import numpy as np
@@ -10,10 +21,14 @@ import streamlit as st
 
 st.set_page_config(page_title="OpenAI Usage Analyzer", page_icon="💸", layout="wide")
 st.title("💸 OpenAI Usage Analyzer")
-st.caption("Sube tus CSVs de **Usage** de OpenAI (API/Projects). Obtén costos por mes y en dónde se usaron los tokens. Suma **cuotas fijas** como ChatGPT Plus a tus reportes.")
+st.caption(
+    "Sube tus CSVs de **Usage** de OpenAI (API/Projects). "
+    "Obtén costos por mes y en dónde se usaron los tokens. "
+    "Suma **cuotas fijas** como ChatGPT Plus a tus reportes."
+)
 
 # -----------------------
-# Default pricing (USD per 1M tokens)
+# Defaults & persistence files
 # -----------------------
 DEFAULT_PRICING = {
     "gpt-4o": (2.50, 10.00),
@@ -29,9 +44,8 @@ DEFAULT_PRICING = {
     "o1": (15.00, 60.00),
     "o3": (25.00, 100.00),
 }
-
 PRICING_FILE = Path("pricing_config.json")
-FIXED_FEES_FILE = Path("fixed_fees.json")  # persistence for monthly fixed fees
+FIXED_FEES_FILE = Path("fixed_fees.json")  # [{"description","amount_usd","start_month","end_month"}]
 
 # -----------------------
 # Pricing helpers
@@ -80,13 +94,11 @@ def df_to_pricing_dict(df):
 # -----------------------
 # Fixed fees helpers
 # -----------------------
-# Fixed fees entries: {"description": str, "amount_usd": float, "start_month": "YYYY-MM", "end_month": "YYYY-MM" or ""}
 def load_fixed_fees():
     if FIXED_FEES_FILE.exists():
         try:
             data = json.loads(FIXED_FEES_FILE.read_text(encoding="utf-8"))
             if isinstance(data, list):
-                # validate minimal schema
                 fixed = []
                 for item in data:
                     desc = str(item.get("description", "")).strip()
@@ -97,7 +109,6 @@ def load_fixed_fees():
                 return fixed
         except Exception:
             st.warning("No se pudo leer 'fixed_fees.json'. Se ignorarán cuotas fijas.")
-    # default suggestion: ChatGPT Plus 20 USD sin rango (usuario decide fechas)
     return []
 
 def save_fixed_fees(fees_list):
@@ -160,24 +171,22 @@ def guess_col(cols, candidates):
 def normalize_columns(df):
     mapping = {}
     cols = list(df.columns)
-    mapping['date'] = guess_datetime_col(cols) or guess_col(cols, ["created", "usage_date"])
-    mapping['model'] = guess_col(cols, ["model", "gpt_model", "engine"])
-    mapping['endpoint'] = guess_col(cols, ["endpoint", "operation", "api_endpoint", "request_type"])
-    mapping['project'] = guess_col(cols, ["project", "project_name", "project id", "project_id"])
-    mapping['user'] = guess_col(cols, ["user", "user_email", "email", "actor", "owner"])
-    mapping['org'] = guess_col(cols, ["org", "organization", "organization_id", "organization name"])
-   mapping['api_key_id'] = guess_col(cols, [
-    "api_key_id", "api key id", "key_id", "key id", "api_key", "api key"
-])
-    mapping['input'] = guess_col(cols, ["prompt tokens", "input tokens", "input_tokens", "prompt_tokens", "tokens_in"])
-    mapping['output'] = guess_col(cols, ["completion tokens", "output tokens", "output_tokens", "tokens_out"])
-    mapping['total'] = guess_col(cols, ["total tokens", "total_tokens", "tokens_total"])
-    mapping['cost'] = guess_col(cols, ["cost", "usd", "amount_usd", "cost_usd", "price_usd"])
+    mapping["date"] = guess_datetime_col(cols) or guess_col(cols, ["created", "usage_date"])
+    mapping["model"] = guess_col(cols, ["model", "gpt_model", "engine"])
+    mapping["endpoint"] = guess_col(cols, ["endpoint", "operation", "api_endpoint", "request_type"])
+    mapping["project"] = guess_col(cols, ["project", "project_name", "project id", "project_id"])
+    mapping["user"] = guess_col(cols, ["user", "user_email", "email", "actor", "owner"])
+    mapping["org"] = guess_col(cols, ["org", "organization", "organization_id", "organization name"])
+    mapping["api_key_id"] = guess_col(cols, ["api_key_id", "api key id", "key_id", "key id", "api_key", "api key"])
+    mapping["input"] = guess_col(cols, ["prompt tokens", "input tokens", "input_tokens", "prompt_tokens", "tokens_in"])
+    mapping["output"] = guess_col(cols, ["completion tokens", "output tokens", "output_tokens", "tokens_out"])
+    mapping["total"] = guess_col(cols, ["total tokens", "total_tokens", "tokens_total"])
+    mapping["cost"] = guess_col(cols, ["cost", "usd", "amount_usd", "cost_usd", "price_usd"])
 
     nd = pd.DataFrame(index=df.index)
 
-    if mapping['date'] is not None:
-        nd["date"] = pd.to_datetime(df[mapping['date']], errors="coerce")
+    if mapping["date"] is not None:
+        nd["date"] = pd.to_datetime(df[mapping["date"]], errors="coerce")
     else:
         nd["date"] = pd.NaT
 
@@ -189,7 +198,7 @@ def normalize_columns(df):
         ser = ser.astype("string").replace({"None": pd.NA, "nan": pd.NA, "NaN": pd.NA}).str.strip()
         return ser
 
-    for c in [\"model\", \"endpoint\", \"project\", \"user\", \"org\", \"api_key_id\"]:
+    for c in ["model", "endpoint", "project", "user", "org", "api_key_id"]:
         nd[c] = safe_text_col(c)
 
     for k in ["input", "output", "total"]:
@@ -241,7 +250,7 @@ def add_estimated_cost(df, pricing_dict):
     df["cost_estimated"] = df.apply(lambda r: estimate_cost(r, pricing_dict), axis=1)
     df["cost_variable"] = df["cost"]
     df.loc[df["cost_variable"].isna(), "cost_variable"] = df.loc[df["cost_variable"].isna(), "cost_estimated"]
-    # alias for backward compatibility
+    # backward compatibility
     df["cost_final"] = df["cost_variable"]
     return df
 
@@ -269,12 +278,12 @@ def summarize(df):
         total_tokens=("total", "sum"),
         rows=("user", "count"),
     ).reset_index().sort_values("cost", ascending=False)
-    daily = df.groupby(df["date"].dt.date)["cost_variable"].sum().reset_index().rename(columns={"date":"day"}).sort_values("day")
-        by_key = df.groupby("api_key_id", dropna=False).agg(
+    by_key = df.groupby("api_key_id", dropna=False).agg(
         cost=("cost_variable", "sum"),
         total_tokens=("total", "sum"),
         rows=("api_key_id", "count"),
     ).reset_index().sort_values("cost", ascending=False)
+    daily = df.groupby(df["date"].dt.date)["cost_variable"].sum().reset_index().rename(columns={"date": "day"}).sort_values("day")
     return monthly, by_model, by_endpoint, by_project, by_user, by_key, daily
 
 def format_money(x):
@@ -286,17 +295,21 @@ def format_money(x):
         return str(x)
 
 # -----------------------
-# Sidebar: Pricing + Fixed fees + Filters
+# Sidebar (pricing + fixed + filters)
 # -----------------------
 with st.sidebar:
     st.header("⚙️ Configuración")
-    st.markdown("1) **Sube tus CSVs** de Usage de OpenAI.\n2) Ajusta filtros.\n3) **Define y guarda tarifas por modelo**.\n4) **Agrega cuotas fijas mensuales** (ej. ChatGPT Plus).")
+    st.markdown(
+        "1) **Sube tus CSVs** de Usage de OpenAI.\n"
+        "2) Ajusta filtros.\n"
+        "3) **Define y guarda tarifas por modelo**.\n"
+        "4) **Agrega cuotas fijas mensuales** (ej. ChatGPT Plus)."
+    )
 
     files = st.file_uploader("CSV(s) de Usage", type=["csv"], accept_multiple_files=True)
 
     st.markdown("---")
     st.subheader("Tarifas por modelo (persistentes)")
-
     if "pricing_dict" not in st.session_state:
         st.session_state.pricing_dict = load_pricing_config()
 
@@ -310,7 +323,7 @@ with st.sidebar:
             "model": st.column_config.TextColumn("Modelo"),
             "input_per_1M": st.column_config.NumberColumn("Costo entrada / 1M", min_value=0.0, step=0.01),
             "output_per_1M": st.column_config.NumberColumn("Costo salida / 1M", min_value=0.0, step=0.01),
-        }
+        },
     )
 
     cols_btn = st.columns(3)
@@ -320,8 +333,7 @@ with st.sidebar:
             if not new_dict:
                 st.error("No hay filas válidas para guardar.")
             else:
-                ok = save_pricing_config(new_dict)
-                if ok:
+                if save_pricing_config(new_dict):
                     st.session_state.pricing_dict = new_dict
                     st.success("Tarifas guardadas en 'pricing_config.json'.")
     with cols_btn[1]:
@@ -352,7 +364,7 @@ with st.sidebar:
         st.session_state.fixed_fees = load_fixed_fees()
 
     ff_df = fixed_fees_to_df(st.session_state.fixed_fees)
-    st.caption("Ejemplos: ChatGPT Plus $20 (start_month=2025-01, sin end_month para aplicar indefinidamente).")
+    st.caption("Ejemplo: ChatGPT Plus $20 (start_month=2025-08, end_month vacío para indefinido).")
     edited_ff = st.data_editor(
         ff_df,
         num_rows="dynamic",
@@ -363,15 +375,14 @@ with st.sidebar:
             "amount_usd": st.column_config.NumberColumn("Monto USD (mensual)", min_value=0.0, step=0.50),
             "start_month": st.column_config.TextColumn("Inicio (YYYY-MM)"),
             "end_month": st.column_config.TextColumn("Fin (YYYY-MM, opcional)"),
-        }
+        },
     )
 
     cols_ff = st.columns(3)
     with cols_ff[0]:
         if st.button("💾 Guardar cuotas fijas"):
             new_fees = df_to_fixed_fees(edited_ff)
-            ok = save_fixed_fees(new_fees)
-            if ok:
+            if save_fixed_fees(new_fees):
                 st.session_state.fixed_fees = new_fees
                 st.success("Cuotas fijas guardadas en 'fixed_fees.json'.")
     with cols_ff[1]:
@@ -419,7 +430,8 @@ if files:
             f.seek(0)
             df = pd.read_csv(f, encoding="utf-8", engine="python", on_bad_lines="skip")
         nd, mp = normalize_columns(df)
-        frames.append(nd); mappings.append((f.name, mp))
+        frames.append(nd)
+        mappings.append((f.name, mp))
 
 if not frames:
     st.info("Sube uno o más CSVs para comenzar.")
@@ -455,24 +467,18 @@ raw = add_estimated_cost(raw, st.session_state.pricing_dict)
 # -----------------------
 monthly, by_model, by_endpoint, by_project, by_user, by_key, daily = summarize(raw)
 
-# Build list of months present in the filtered data
 months_present = monthly["month"].tolist()
-
-# Compute fixed fees per month according to ranges
 fees = st.session_state.fixed_fees or []
 fees_by_month = {m: 0.0 for m in months_present}
 for m in months_present:
     for fee in fees:
-        desc = fee.get("description", "")
         amt = float(fee.get("amount_usd", 0.0) or 0.0)
         sm = fee.get("start_month", "").strip()
         em = fee.get("end_month", "").strip()
         if month_in_range(m, sm, em):
             fees_by_month[m] += amt
-
 fees_df = pd.DataFrame({"month": months_present, "fixed_fees": [fees_by_month[m] for m in months_present]})
 
-# Merge to monthly variable
 monthly_merged = monthly.merge(fees_df, on="month", how="left").fillna({"fixed_fees": 0.0})
 monthly_merged = monthly_merged.rename(columns={"cost_variable": "variable_cost"} if "cost_variable" in monthly_merged.columns else {"cost": "variable_cost"})
 monthly_merged["total_cost"] = monthly_merged["variable_cost"] + monthly_merged["fixed_fees"]
@@ -483,7 +489,7 @@ with st.expander("Ver mapeos de columnas"):
     for fname, mp in mappings:
         st.code(json.dumps({"file": fname, **mp}, indent=2, ensure_ascii=False))
 
-# KPIs (use total with fixed fees)
+# KPIs
 col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.metric("Gasto total (var + fijo)", format_money(monthly_merged["total_cost"].sum()))
@@ -501,7 +507,7 @@ st.dataframe(
         fixed_fees=monthly_merged["fixed_fees"].map(format_money),
         total_cost=monthly_merged["total_cost"].map(format_money),
     ),
-    use_container_width=True
+    use_container_width=True,
 )
 st.bar_chart(monthly_merged.set_index("month")[["variable_cost", "fixed_fees", "total_cost"]])
 
@@ -511,18 +517,17 @@ st.dataframe(by_model.assign(cost=by_model["cost"].map(format_money)), use_conta
 st.markdown("## 🔌 Por endpoint (variable)")
 st.dataframe(by_endpoint.assign(cost=by_endpoint["cost"].map(format_money)), use_container_width=True)
 
-st.markdown("## 🔑 Por API key (variable)")
-st.dataframe(by_key.assign(cost=by_key["cost"].map(format_money)), use_container_width=True)
-
-
 st.markdown("## 📁 Por proyecto (variable)")
 st.dataframe(by_project.assign(cost=by_project["cost"].map(format_money)), use_container_width=True)
 
 st.markdown("## 👤 Por usuario (variable)")
 st.dataframe(by_user.assign(cost=by_user["cost"].map(format_money)), use_container_width=True)
 
+st.markdown("## 🔑 Por API key (variable)")
+st.dataframe(by_key.assign(cost=by_key["cost"].map(format_money)), use_container_width=True)
+
 st.markdown("## 📆 Gasto diario (variable)")
-st.dataframe(daily.assign(cost_variable=daily["cost_variable"].map(format_money)).rename(columns={"cost_variable":"cost"}), use_container_width=True)
+st.dataframe(daily.assign(cost_variable=daily["cost_variable"].map(format_money)).rename(columns={"cost_variable": "cost"}), use_container_width=True)
 st.line_chart(daily.set_index("day")["cost_variable"])
 
 # Downloads
@@ -542,11 +547,11 @@ with colD:
 with colE:
     st.download_button("Por usuario (CSV)", to_csv_bytes(by_user), file_name="summary_by_user.csv", mime="text/csv")
 with colF:
-    st.download_button("Diario (CSV)", to_csv_bytes(daily), file_name="summary_daily.csv", mime="text/csv")
-with colG:
-    st.download_button("Cuotas (CSV)", to_csv_bytes(pd.DataFrame(st.session_state.fixed_fees)), file_name="fixed_fees.csv", mime="text/csv")
-with colH:
     st.download_button("Por API key (CSV)", to_csv_bytes(by_key), file_name="summary_by_api_key.csv", mime="text/csv")
+with colG:
+    st.download_button("Diario (CSV)", to_csv_bytes(daily), file_name="summary_daily.csv", mime="text/csv")
+with colH:
+    st.download_button("Cuotas (CSV)", to_csv_bytes(pd.DataFrame(st.session_state.fixed_fees)), file_name="fixed_fees.csv", mime="text/csv")
 
 st.markdown("---")
 st.caption("Define tus **precios por modelo** y **cuotas fijas mensuales**. Se guardan en 'pricing_config.json' y 'fixed_fees.json'.")
