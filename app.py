@@ -166,7 +166,9 @@ def normalize_columns(df):
     mapping['project'] = guess_col(cols, ["project", "project_name", "project id", "project_id"])
     mapping['user'] = guess_col(cols, ["user", "user_email", "email", "actor", "owner"])
     mapping['org'] = guess_col(cols, ["org", "organization", "organization_id", "organization name"])
-    mapping['api_key_id'] = guess_col(cols, [\"api_key_id\", \"api key id\", \"key_id\", \"key id\", \"api_key\", \"api key\"])
+   mapping['api_key_id'] = guess_col(cols, [
+    "api_key_id", "api key id", "key_id", "key id", "api_key", "api key"
+])
     mapping['input'] = guess_col(cols, ["prompt tokens", "input tokens", "input_tokens", "prompt_tokens", "tokens_in"])
     mapping['output'] = guess_col(cols, ["completion tokens", "output tokens", "output_tokens", "tokens_out"])
     mapping['total'] = guess_col(cols, ["total tokens", "total_tokens", "tokens_total"])
